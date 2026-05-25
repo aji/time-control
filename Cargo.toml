@@ -1,0 +1,9 @@
+[package]
+name = "time-control"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+[dev-dependencies]
+pancurses = "0.17.0"
