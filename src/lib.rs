@@ -85,6 +85,17 @@ impl Into<SimpleDelayClock> for SimpleDelayConfig {
     }
 }
 
+impl SimpleDelayConfig {
+    /// Create a new simple delay clock configuration with the given initial
+    /// minutes and delay seconds.
+    pub fn new(initial_mins: u64, delay_secs: u64) -> SimpleDelayConfig {
+        SimpleDelayConfig {
+            initial: Duration::from_mins(initial_mins),
+            delay: Duration::from_secs(delay_secs),
+        }
+    }
+}
+
 /// A simple delay clock
 ///
 /// See [`SimpleDelayConfig`] for more information.
@@ -170,10 +181,7 @@ impl fmt::Display for SimpleDelayClock {
 fn test_simple_delay() {
     let t = Duration::from_secs;
 
-    let mut clk = SimpleDelayClock::new(SimpleDelayConfig {
-        initial: t(60),
-        delay: t(10),
-    });
+    let mut clk = SimpleDelayClock::new(SimpleDelayConfig::new(1, 10));
 
     let spend = |clk: &mut SimpleDelayClock, secs| -> (bool, u64, u64) {
         let expired = clk.turn_spend(t(secs));
@@ -223,6 +231,18 @@ pub struct FischerConfig {
 impl Into<FischerClock> for FischerConfig {
     fn into(self) -> FischerClock {
         FischerClock::new(self)
+    }
+}
+
+impl FischerConfig {
+    /// Create a new Fischer clock config with the given initial minutes and
+    /// increment seconds.
+    pub fn new(initial_mins: u64, increment_secs: u64) -> FischerConfig {
+        FischerConfig {
+            initial: Duration::from_mins(initial_mins),
+            increment: Duration::from_secs(increment_secs),
+            limit: None,
+        }
     }
 }
 
@@ -293,11 +313,7 @@ impl fmt::Display for FischerClock {
 fn test_fischer() {
     let t = Duration::from_secs;
 
-    let mut clk = FischerClock::new(FischerConfig {
-        initial: t(60),
-        increment: t(10),
-        limit: None,
-    });
+    let mut clk = FischerClock::new(FischerConfig::new(1, 10));
 
     let spend = |clk: &mut FischerClock, secs| -> (bool, u64) {
         let expired = clk.turn_spend(t(secs));
@@ -361,6 +377,17 @@ pub struct BronsteinConfig {
 impl Into<BronsteinClock> for BronsteinConfig {
     fn into(self) -> BronsteinClock {
         BronsteinClock::new(self)
+    }
+}
+
+impl BronsteinConfig {
+    /// Create a new Bronstein clock config with the given initial minutes and
+    /// max increment seconds.
+    pub fn new(initial_mins: u64, max_increment_secs: u64) -> BronsteinConfig {
+        BronsteinConfig {
+            initial: Duration::from_mins(initial_mins),
+            max_increment: Duration::from_secs(max_increment_secs),
+        }
     }
 }
 
@@ -431,10 +458,7 @@ impl fmt::Display for BronsteinClock {
 fn test_bronstein() {
     let t = Duration::from_secs;
 
-    let mut clk = BronsteinClock::new(BronsteinConfig {
-        initial: t(60),
-        max_increment: t(10),
-    });
+    let mut clk = BronsteinClock::new(BronsteinConfig::new(1, 10));
 
     let spend = |clk: &mut BronsteinClock, secs| -> (bool, u64) {
         let expired = clk.turn_spend(t(secs));
@@ -501,6 +525,18 @@ pub struct ByoYomiConfig {
 impl Into<ByoYomiClock> for ByoYomiConfig {
     fn into(self) -> ByoYomiClock {
         ByoYomiClock::new(self)
+    }
+}
+
+impl ByoYomiConfig {
+    /// Create a new byo-yomi clock config with the given initial minutes,
+    /// period count, and period seconds.
+    pub fn new(initial_mins: u64, num_periods: usize, period_secs: u64) -> ByoYomiConfig {
+        ByoYomiConfig {
+            initial: Duration::from_mins(initial_mins),
+            period_time: Duration::from_secs(period_secs),
+            num_periods,
+        }
     }
 }
 
@@ -649,11 +685,8 @@ impl fmt::Display for ByoYomiClock {
 fn test_byo_yomi() {
     let t = Duration::from_secs;
 
-    let mut clk = ByoYomiClock::new(ByoYomiConfig {
-        initial: t(60),
-        num_periods: 3,
-        period_time: t(10),
-    });
+    // 1:00 +3x10
+    let mut clk = ByoYomiClock::new(ByoYomiConfig::new(1, 3, 10));
 
     let info = |clk: &ByoYomiClock| -> (u64, u64, usize) {
         (

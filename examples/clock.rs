@@ -49,41 +49,19 @@ static CHOICES: LazyLock<Vec<Choice>> = LazyLock::new(|| {
     vec![
         Choice {
             label: "Simple delay 3:00 (5s)",
-            make: || {
-                AnyConfig::from(SimpleDelayConfig {
-                    initial: Duration::from_mins(3),
-                    delay: Duration::from_secs(5),
-                })
-            },
+            make: || AnyConfig::from(SimpleDelayConfig::new(3, 5)),
         },
         Choice {
             label: "Fischer 3:00 +5s",
-            make: || {
-                AnyConfig::from(FischerConfig {
-                    initial: Duration::from_mins(3),
-                    increment: Duration::from_secs(5),
-                    limit: None,
-                })
-            },
+            make: || AnyConfig::from(FischerConfig::new(3, 5)),
         },
         Choice {
             label: "Bronstein 3:00 +5s",
-            make: || {
-                AnyConfig::from(BronsteinConfig {
-                    initial: Duration::from_mins(3),
-                    max_increment: Duration::from_secs(5),
-                })
-            },
+            make: || AnyConfig::from(BronsteinConfig::new(3, 5)),
         },
         Choice {
             label: "Byo-yomi 2:00 +3x20s",
-            make: || {
-                AnyConfig::from(ByoYomiConfig {
-                    initial: Duration::from_mins(2),
-                    period_time: Duration::from_secs(20),
-                    num_periods: 3,
-                })
-            },
+            make: || AnyConfig::from(ByoYomiConfig::new(2, 3, 20)),
         },
     ]
 });
