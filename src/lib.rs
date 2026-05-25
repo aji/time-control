@@ -1,7 +1,81 @@
 #![cfg_attr(not(test), no_std)]
 
 //! A small crate with implementations of various time controls for turn-based
-//! games like chess and go.
+//! games like chess and go. It includes the following clocks:
+//!
+//! - [`SimpleDelayClock`] and [`SimpleDelayConfig`], which at the start of a
+//! turn waits for a delay period before counting down the main time.
+//!
+//! - [`FischerClock`] and [`FischerConfig`], which adds a fixed increment at
+//! the end of a turn.
+//!
+//! - [`BronsteinClock`] and [`BronsteinConfig`], which returns the time spent
+//! during the turn, up to a certain limit.
+//!
+//! - [`ByoYomiClock`] and [`ByoYomiConfig`], which after the main time has
+//! expired begins counting down byo-yomi periods which reset at the end of the
+//! turn if not fully consumed.
+//!
+//! Additionally, it includes [`AnyClock`] and [`AnyConfig`] which are
+//! enumerations of the above, allowing generic handling of clocks and
+//! configurations. There is also a `dyn`-compatible [`TimeControl`] trait
+//! that can be used to a similar effect.
+//!
+//! Finally, [`TwoPlayer`] provides convenience functionality for managing
+//! clocks for two players, where the currently decrementing clock alternates
+//! between players.
+//!
+//! # Example
+//!
+//! Here's an example of using the [`TimeControl`] API directly for a single
+//! clock:
+//!
+//! ```rust
+//! # use time_control::*;
+//! # use std::time::Duration;
+//! let _1s = Duration::from_secs(1);
+//! let _1m = Duration::from_mins(1);
+//!
+//! // Our clock config, a simple 3:00 clock with 5s increment.
+//! let cf = FischerConfig::new(3, 5);
+//!
+//! // The clock itself:
+//! let mut clk = FischerClock::new(cf);
+//!
+//! // Initially, the clock shows 3:00
+//! assert_eq!(clk.to_string(), "3:00");
+//!
+//! // We can start a turn, then spend some time as it counts down:
+//! clk.turn_start();
+//! clk.turn_spend(_1s);
+//! assert_eq!(clk.to_string(), "2:59");
+//! clk.turn_spend(_1s);
+//! assert_eq!(clk.to_string(), "2:58");
+//! clk.turn_spend(_1s);
+//! assert_eq!(clk.to_string(), "2:57");
+//!
+//! // When we end our turn, the 5s increment is added:
+//! clk.turn_end();
+//! assert_eq!(clk.to_string(), "3:02");
+//!
+//! // Now let's start our next turn and spend too much time thinking...
+//! clk.turn_start();
+//! assert_eq!(clk.turn_spend(_1m), false);
+//! assert_eq!(clk.to_string(), "2:02");
+//! assert_eq!(clk.turn_spend(_1m), false);
+//! assert_eq!(clk.to_string(), "1:02");
+//! assert_eq!(clk.turn_spend(_1m), false);
+//! assert_eq!(clk.to_string(), "2.0s");
+//! assert_eq!(clk.turn_spend(_1s), false);
+//! assert_eq!(clk.to_string(), "1.0s");
+//!
+//! // After 1 more second, the clock expires!
+//! assert_eq!(clk.turn_spend(_1s), true);
+//! assert_eq!(clk.to_string(), "0.0s");
+//! assert!(clk.is_expired());
+//! clk.turn_end();
+//! assert_eq!(clk.to_string(), "0.0s");
+//! ```
 
 use core::{fmt, time::Duration};
 
@@ -16,7 +90,7 @@ use core::{fmt, time::Duration};
 /// - `turn_start` at the start of a turn.
 /// - `turn_spend` one or more times during the turn. The sum of durations
 ///    passed to this function represents the total amount of time spent thinking
-///    during the turn.
+///    during the turn, and the return value indicates if the clock expired.
 /// - `turn_end` at the end of the turn.
 ///
 /// When a clock expires, it remains in the expired state until it is reset.
@@ -40,17 +114,20 @@ pub trait TimeControl {
     fn max_remaining(&self) -> Duration;
 
     /// Apply any clock adjustments for the start of this player's turn. If the
-    /// clock is already expired, this cannot un-expire it.
-    fn turn_start(&mut self) {}
+    /// clock is already expired, this cannot un-expire it. This is a no-op if
+    /// `turn_end` has not been called since the last call to `turn_start`
+    fn turn_start(&mut self);
 
     /// Record that this player has spent the given amount of time thinking.
     /// Returns `true` if the clock has expired, or `false` if there is still
-    /// time remaining.
+    /// time remaining. This is a no-op if `turn_end` has been called since the
+    /// last call to `turn_start`.
     fn turn_spend(&mut self, elapsed: Duration) -> bool;
 
     /// Apply any clock adjustments for the end of this player's turn. If the
-    /// clock is already expired, this cannot un-expire it.
-    fn turn_end(&mut self) {}
+    /// clock is already expired, this cannot un-expire it. This is a no-op if
+    /// `turn_end` has already been called since the clast call to `turn_start`.
+    fn turn_end(&mut self);
 
     /// A combination of `turn_start`, `turn_spend`, and `turn_end`, a
     /// convenience function for use cases that only need to call `turn_spend`
@@ -102,6 +179,7 @@ impl SimpleDelayConfig {
 #[derive(Copy, Clone, Debug)]
 pub struct SimpleDelayClock {
     config: SimpleDelayConfig,
+    running: bool,
     delay: Duration,
     main: Duration,
 }
@@ -111,6 +189,7 @@ impl SimpleDelayClock {
     pub fn new(config: SimpleDelayConfig) -> SimpleDelayClock {
         SimpleDelayClock {
             config,
+            running: false,
             delay: Duration::ZERO,
             main: config.initial,
         }
@@ -146,13 +225,20 @@ impl TimeControl for SimpleDelayClock {
     }
 
     fn turn_start(&mut self) {
-        self.delay = match self.is_expired() {
-            true => Duration::ZERO,
-            false => self.config.delay,
-        };
+        if !self.running {
+            self.running = true;
+            self.delay = match self.is_expired() {
+                true => Duration::ZERO,
+                false => self.config.delay,
+            };
+        }
     }
 
     fn turn_spend(&mut self, elapsed: Duration) -> bool {
+        if !self.running {
+            return self.main.is_zero();
+        }
+
         let delay_use = self.delay.min(elapsed);
         let main_use = elapsed - delay_use;
 
@@ -163,7 +249,10 @@ impl TimeControl for SimpleDelayClock {
     }
 
     fn turn_end(&mut self) {
-        self.delay = Duration::ZERO;
+        if self.running {
+            self.running = false;
+            self.delay = Duration::ZERO;
+        }
     }
 }
 
@@ -252,6 +341,7 @@ impl FischerConfig {
 #[derive(Copy, Clone, Debug)]
 pub struct FischerClock {
     config: FischerConfig,
+    running: bool,
     main: Duration,
 }
 
@@ -260,6 +350,7 @@ impl FischerClock {
     pub fn new(config: FischerConfig) -> FischerClock {
         FischerClock {
             config,
+            running: false,
             main: config.initial,
         }
     }
@@ -288,16 +379,25 @@ impl TimeControl for FischerClock {
         self.main
     }
 
+    fn turn_start(&mut self) {
+        self.running = true;
+    }
+
     fn turn_spend(&mut self, elapsed: Duration) -> bool {
-        self.main = self.main.saturating_sub(elapsed);
+        if self.running {
+            self.main = self.main.saturating_sub(elapsed);
+        }
         self.main.is_zero()
     }
 
     fn turn_end(&mut self) {
-        if !self.main.is_zero() {
-            self.main += self.config.increment;
-            if let Some(limit) = self.config.limit {
-                self.main = self.main.min(limit);
+        if self.running {
+            self.running = false;
+            if !self.main.is_zero() {
+                self.main += self.config.increment;
+                if let Some(limit) = self.config.limit {
+                    self.main = self.main.min(limit);
+                }
             }
         }
     }
@@ -397,6 +497,7 @@ impl BronsteinConfig {
 #[derive(Copy, Clone, Debug)]
 pub struct BronsteinClock {
     config: BronsteinConfig,
+    running: bool,
     main: Duration,
     spent: Duration,
 }
@@ -406,6 +507,7 @@ impl BronsteinClock {
     pub fn new(config: BronsteinConfig) -> BronsteinClock {
         BronsteinClock {
             config,
+            running: false,
             main: config.initial,
             spent: Duration::ZERO,
         }
@@ -435,15 +537,25 @@ impl TimeControl for BronsteinClock {
         self.main
     }
 
+    fn turn_start(&mut self) {
+        self.running = true;
+    }
+
     fn turn_spend(&mut self, elapsed: Duration) -> bool {
-        self.spent += elapsed;
-        self.main = self.main.saturating_sub(elapsed);
+        if self.running {
+            self.spent += elapsed;
+            self.main = self.main.saturating_sub(elapsed);
+        }
         self.main.is_zero()
     }
 
     fn turn_end(&mut self) {
-        if !self.main.is_zero() {
-            self.main += self.config.max_increment.min(self.spent);
+        if self.running {
+            self.running = false;
+            if !self.main.is_zero() {
+                self.main += self.config.max_increment.min(self.spent);
+            }
+            self.spent = Duration::ZERO;
         }
     }
 }
@@ -472,6 +584,10 @@ fn test_bronstein() {
     assert_eq!(clk.main_remaining(), t(60));
     clk.turn_start();
     assert_eq!(spend(&mut clk, 20), (false, 40));
+    clk.turn_end();
+    assert_eq!(clk.main_remaining(), t(50));
+    clk.turn_start();
+    assert_eq!(spend(&mut clk, 5), (false, 45));
     clk.turn_end();
     assert_eq!(clk.main_remaining(), t(50));
     clk.turn_start();
@@ -546,6 +662,7 @@ impl ByoYomiConfig {
 #[derive(Copy, Clone, Debug)]
 pub struct ByoYomiClock {
     config: ByoYomiConfig,
+    running: bool,
     main: Duration,
     period: Duration,
     unused_periods: usize,
@@ -563,6 +680,7 @@ impl ByoYomiClock {
     pub fn new(config: ByoYomiConfig) -> ByoYomiClock {
         ByoYomiClock {
             config,
+            running: false,
             main: config.initial,
             period: Duration::ZERO,
             unused_periods: config.num_periods,
@@ -619,6 +737,7 @@ impl TimeControl for ByoYomiClock {
     }
 
     fn turn_start(&mut self) {
+        self.running = true;
         if self.in_byo_yomi() && self.period.is_zero() && self.unused_periods > 0 {
             self.unused_periods -= 1;
             self.period = self.config.period_time;
@@ -626,6 +745,10 @@ impl TimeControl for ByoYomiClock {
     }
 
     fn turn_spend(&mut self, mut elapsed: Duration) -> bool {
+        if !self.running {
+            return self.is_expired();
+        }
+
         // spend main time. this is a no-op if our main time is zero
         let spend_main = elapsed.min(self.main);
         self.main -= spend_main;
@@ -654,10 +777,13 @@ impl TimeControl for ByoYomiClock {
     }
 
     fn turn_end(&mut self) {
-        if self.in_byo_yomi() && !self.period.is_zero() {
-            // return the unspent byo-yomi period.
-            self.period = Duration::ZERO;
-            self.unused_periods += 1;
+        if self.running {
+            self.running = false;
+            if self.in_byo_yomi() && !self.period.is_zero() {
+                // return the unspent byo-yomi period.
+                self.period = Duration::ZERO;
+                self.unused_periods += 1;
+            }
         }
     }
 }
@@ -964,13 +1090,11 @@ where
     }
 
     /// Update the clocks given the amount of time that has passed since the
-    /// last update.
-    pub fn turn_spend(&mut self, elapsed: Duration) {
-        match self.p1_turn {
-            Some(true) => self.p1.turn_spend(elapsed),
-            Some(false) => self.p2.turn_spend(elapsed),
-            None => false,
-        };
+    /// last update. Returns whether either player's clock has expired
+    pub fn turn_spend(&mut self, elapsed: Duration) -> bool {
+        let p1_expired = self.p1.turn_spend(elapsed);
+        let p2_expired = self.p2.turn_spend(elapsed);
+        p1_expired || p2_expired
     }
 }
 
