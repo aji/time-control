@@ -114,6 +114,11 @@ impl SimpleDelayClock {
     pub fn main_remaining(&self) -> Duration {
         self.main
     }
+
+    /// Return the delay period time remaining
+    pub fn delay_remaining(&self) -> Duration {
+        self.delay
+    }
 }
 
 impl TimeControl for SimpleDelayClock {
@@ -159,6 +164,35 @@ impl fmt::Display for SimpleDelayClock {
         }
         Ok(())
     }
+}
+
+#[test]
+fn test_simple_delay() {
+    let t = Duration::from_secs;
+
+    let mut clk = SimpleDelayClock::new(SimpleDelayConfig {
+        initial: t(60),
+        delay: t(10),
+    });
+
+    let spend = |clk: &mut SimpleDelayClock, secs| -> (bool, u64, u64) {
+        let expired = clk.turn_spend(t(secs));
+        (
+            expired,
+            clk.main_remaining().as_secs(),
+            clk.delay_remaining().as_secs(),
+        )
+    };
+
+    clk.turn_start();
+    assert_eq!(spend(&mut clk, 0), (false, 60, 10));
+    assert_eq!(spend(&mut clk, 5), (false, 60, 5));
+    assert_eq!(spend(&mut clk, 5), (false, 60, 0));
+    assert_eq!(spend(&mut clk, 5), (false, 55, 0));
+    assert_eq!(spend(&mut clk, 15), (false, 40, 0));
+    assert_eq!(spend(&mut clk, 20), (false, 20, 0));
+    assert_eq!(spend(&mut clk, 20), (true, 0, 0));
+    assert_eq!(spend(&mut clk, 20), (true, 0, 0));
 }
 
 // Fischer clock
@@ -247,6 +281,32 @@ impl fmt::Display for FischerClock {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", ShowCountdown::with_minutes(self.main))
     }
+}
+
+#[test]
+fn test_fischer() {
+    let t = Duration::from_secs;
+
+    let mut clk = FischerClock::new(FischerConfig {
+        initial: t(60),
+        increment: t(10),
+    });
+
+    let spend = |clk: &mut FischerClock, secs| -> (bool, u64) {
+        let expired = clk.turn_spend(t(secs));
+        (expired, clk.main_remaining().as_secs())
+    };
+
+    clk.turn_start();
+    assert_eq!(spend(&mut clk, 0), (false, 60));
+    assert_eq!(spend(&mut clk, 5), (false, 55));
+    assert_eq!(spend(&mut clk, 15), (false, 40));
+    assert_eq!(spend(&mut clk, 20), (false, 20));
+    clk.turn_end();
+    assert_eq!(clk.main_remaining(), t(30));
+    clk.turn_start();
+    assert_eq!(spend(&mut clk, 20), (false, 10));
+    assert_eq!(spend(&mut clk, 20), (true, 0));
 }
 
 // Byo-yomi
@@ -386,6 +446,12 @@ impl TimeControl for ByoYomiClock {
         self.main -= spend_main;
         elapsed -= spend_main;
 
+        // start a byo-yomi period if necessary
+        if self.in_byo_yomi() && self.period.is_zero() && self.unused_periods > 0 {
+            self.period = self.config.period_time;
+            self.unused_periods -= 1;
+        }
+
         // any remaining time in `elapsed` should be spent on byo-yomi periods
         while !elapsed.is_zero() && !self.max_remaining().is_zero() {
             let spend_period = elapsed.min(self.period);
@@ -428,6 +494,51 @@ impl fmt::Display for ByoYomiClock {
         write!(f, " +{}x{}", self.unused_periods, period)?;
         Ok(())
     }
+}
+
+#[test]
+fn test_byo_yomi() {
+    let t = Duration::from_secs;
+
+    let mut clk = ByoYomiClock::new(ByoYomiConfig {
+        initial: t(60),
+        num_periods: 3,
+        period_time: t(10),
+    });
+
+    let info = |clk: &ByoYomiClock| -> (u64, u64, usize) {
+        (
+            clk.main_remaining().as_secs(),
+            clk.this_period_remaining().as_secs(),
+            clk.unused_periods,
+        )
+    };
+    let spend = |clk: &mut ByoYomiClock, secs| -> (bool, u64, u64, usize) {
+        let expired = clk.turn_spend(t(secs));
+        (
+            expired,
+            clk.main_remaining().as_secs(),
+            clk.this_period_remaining().as_secs(),
+            clk.unused_periods,
+        )
+    };
+
+    assert_eq!(info(&clk), (60, 0, 3));
+    clk.turn_start();
+    assert_eq!(info(&clk), (60, 0, 3));
+    assert_eq!(spend(&mut clk, 20), (false, 40, 0, 3));
+    assert_eq!(spend(&mut clk, 20), (false, 20, 0, 3));
+    assert_eq!(spend(&mut clk, 20), (false, 0, 10, 2));
+    assert_eq!(spend(&mut clk, 5), (false, 0, 5, 2));
+    assert_eq!(spend(&mut clk, 5), (false, 0, 10, 1));
+    assert_eq!(spend(&mut clk, 5), (false, 0, 5, 1));
+    clk.turn_end();
+    assert_eq!(info(&clk), (0, 0, 2));
+    clk.turn_start();
+    assert_eq!(info(&clk), (0, 10, 1));
+    assert_eq!(spend(&mut clk, 10), (false, 0, 10, 0));
+    assert_eq!(spend(&mut clk, 10), (true, 0, 0, 0));
+    assert_eq!(spend(&mut clk, 10), (true, 0, 0, 0));
 }
 
 // AnyClock
