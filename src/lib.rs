@@ -1019,7 +1019,7 @@ impl TimeControl for AnyClock {
 /// assert_eq!(show(&tc), "0:10 0.0s");
 /// ```
 pub struct TwoPlayer<P1, P2 = P1> {
-    p1_lose: Option<bool>,
+    expired: bool,
     p1_turn: Option<bool>,
     p1: P1,
     p2: P2,
@@ -1051,7 +1051,7 @@ where
         T2: Into<P2>,
     {
         TwoPlayer {
-            p1_lose: None,
+            expired: false,
             p1_turn: None,
             p1: p1.into(),
             p2: p2.into(),
@@ -1061,7 +1061,7 @@ where
     /// Reset the time control to its initial configuration. After resetting,
     /// the time control will be stopped for both players.
     pub fn reset(&mut self) {
-        self.p1_lose = None;
+        self.expired = false;
         self.p1_turn = None;
         self.p1.reset();
         self.p2.reset();
@@ -1069,17 +1069,17 @@ where
 
     /// Return whether either player's clock has expired
     pub fn is_expired(&self) -> bool {
-        self.p1_lose.is_some()
+        self.expired
     }
 
     /// Return whether the first player's clock is counting down.
     pub fn p1_turn(&self) -> bool {
-        self.p1_lose.is_none() && self.p1_turn.unwrap_or(false)
+        !self.expired && self.p1_turn.unwrap_or(false)
     }
 
     /// Return whether the second player's clock is counting down.
     pub fn p2_turn(&self) -> bool {
-        self.p1_lose.is_none() && !self.p1_turn.unwrap_or(true)
+        !self.expired && !self.p1_turn.unwrap_or(true)
     }
 
     /// Return a reference to the first player's time control
@@ -1093,7 +1093,7 @@ where
     }
 
     fn set_turn(&mut self, p1: Option<bool>) {
-        if self.p1_lose.is_some() {
+        if self.expired {
             return;
         }
 
@@ -1143,23 +1143,15 @@ where
     /// Update the clocks given the amount of time that has passed since the
     /// last update. Returns whether either player's clock has expired
     pub fn turn_spend(&mut self, elapsed: Duration) -> bool {
-        if self.p1_lose.is_none() {
+        if !self.expired {
             let p1_expired = self.p1.turn_spend(elapsed);
             let p2_expired = self.p2.turn_spend(elapsed);
-
-            if p1_expired {
+            if p1_expired || p2_expired {
                 self.clear_turn();
-                self.p1_lose = Some(true);
+                self.expired = true;
             }
-            if p2_expired {
-                self.clear_turn();
-                self.p1_lose = Some(false);
-            }
-
-            p1_expired || p2_expired
-        } else {
-            true
         }
+        self.expired
     }
 }
 
