@@ -8,7 +8,8 @@ use pancurses::{
     init_pair, initscr, noecho, start_color,
 };
 use time_control::{
-    AnyClock, AnyConfig, ByoYomiConfig, FischerConfig, SimpleDelayConfig, TimeControl, TwoPlayer,
+    AnyClock, AnyConfig, BronsteinConfig, ByoYomiConfig, FischerConfig, SimpleDelayConfig,
+    TimeControl, TwoPlayer,
 };
 
 type BoxedGameClock = TwoPlayer<AnyClock>;
@@ -61,6 +62,16 @@ static CHOICES: LazyLock<Vec<Choice>> = LazyLock::new(|| {
                 AnyConfig::from(FischerConfig {
                     initial: Duration::from_mins(3),
                     increment: Duration::from_secs(5),
+                    limit: None,
+                })
+            },
+        },
+        Choice {
+            label: "Bronstein 3:00 +5s",
+            make: || {
+                AnyConfig::from(BronsteinConfig {
+                    initial: Duration::from_mins(3),
+                    max_increment: Duration::from_secs(5),
                 })
             },
         },
@@ -84,7 +95,6 @@ fn choose_time_control(win: &Window) -> Option<&'static Choice> {
     let mut choice = 0;
     loop {
         win.mvprintw(2, 2, "Choose a time control:");
-
         for (i, x) in CHOICES.iter().enumerate() {
             win.mv(4 + i as i32, 2);
             match i == choice {
@@ -93,6 +103,11 @@ fn choose_time_control(win: &Window) -> Option<&'static Choice> {
             };
             win.printw(x.label);
         }
+        win.mvprintw(
+            5 + CHOICES.len() as i32,
+            2,
+            "Arrows:Select Enter:Choose q:Exit",
+        );
 
         match win.getch() {
             Some(Input::KeyUp) => choice = choice.saturating_sub(1),
@@ -123,7 +138,7 @@ fn run_time_control(win: &Window, name: &'static str, mut tc: BoxedGameClock) {
         win.mvprintw(5, 2, "P2: ");
         win.clrtoeol();
         show_time_control(win, tc.p2(), tc.p2_turn());
-        win.mvprintw(7, 2, "<Space>:Toggle p:Pause f:Fast-forward r:Reset q:Exit");
+        win.mvprintw(7, 2, "Space:Toggle p:Pause f:Fast-forward r:Reset q:Exit");
 
         match win.getch() {
             Some(Input::Character(' ')) => match tc.p1_turn() {
@@ -155,7 +170,7 @@ fn run_time_control(win: &Window, name: &'static str, mut tc: BoxedGameClock) {
     }
 }
 
-fn show_time_control<T: TimeControl>(win: &Window, tc: &T, is_turn: bool) {
+fn show_time_control(win: &Window, tc: &AnyClock, is_turn: bool) {
     win.attrset(if tc.is_expired() {
         COLOR_PAIR(1)
     } else if is_turn {

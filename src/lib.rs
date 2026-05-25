@@ -20,7 +20,7 @@ use core::{fmt, time::Duration};
 /// - `turn_end` at the end of the turn.
 ///
 /// When a clock expires, it remains in the expired state until it is reset.
-pub trait TimeControl: fmt::Display {
+pub trait TimeControl {
     /// Reset this clock to its initial configuration
     fn reset(&mut self);
 
@@ -215,6 +215,9 @@ pub struct FischerConfig {
 
     /// The amount of time added to the clock after finishing a turn.
     pub increment: Duration,
+
+    /// A limit to the amount of time on the clock after incrementing.
+    pub limit: Option<Duration>,
 }
 
 impl Into<FischerClock> for FischerConfig {
@@ -273,6 +276,9 @@ impl TimeControl for FischerClock {
     fn turn_end(&mut self) {
         if !self.main.is_zero() {
             self.main += self.config.increment;
+            if let Some(limit) = self.config.limit {
+                self.main = self.main.min(limit);
+            }
         }
     }
 }
@@ -290,6 +296,7 @@ fn test_fischer() {
     let mut clk = FischerClock::new(FischerConfig {
         initial: t(60),
         increment: t(10),
+        limit: None,
     });
 
     let spend = |clk: &mut FischerClock, secs| -> (bool, u64) {
@@ -307,6 +314,148 @@ fn test_fischer() {
     clk.turn_start();
     assert_eq!(spend(&mut clk, 20), (false, 10));
     assert_eq!(spend(&mut clk, 20), (true, 0));
+
+    let mut clk = FischerClock::new(FischerConfig {
+        initial: t(60),
+        increment: t(10),
+        limit: Some(t(70)),
+    });
+
+    clk.turn_start();
+    assert_eq!(spend(&mut clk, 5), (false, 55));
+    clk.turn_end();
+    clk.turn_start();
+    assert_eq!(spend(&mut clk, 5), (false, 60));
+    clk.turn_end();
+    clk.turn_start();
+    assert_eq!(spend(&mut clk, 5), (false, 65));
+    clk.turn_end();
+    clk.turn_start();
+    assert_eq!(spend(&mut clk, 5), (false, 65));
+    clk.turn_end();
+}
+
+// Bronstein delay
+// -----------------------------------------------------------------------------
+
+/// Configuration for a clock with Bronstein delay rules
+///
+/// This clock is like Fischer but at the end of a turn adds no more time than
+/// was used during the move. For example, if the increment is 10 seconds and
+/// a player only uses 5 seconds, then only 5 seconds are added to their clock
+/// at the end of their turn. If they use 20 seconds, then only 10 seconds are
+/// added to their clock.
+///
+/// This type of clock is very similar to the simple delay clock, with the
+/// difference essentially being that the delay is accounted for at the end of
+/// the turn rather than the start.
+#[derive(Copy, Clone, Debug)]
+pub struct BronsteinConfig {
+    /// The amount of time on the clock at the start of the game.
+    pub initial: Duration,
+
+    /// The maximum amount of time added to the clock at the end of the turn.
+    pub max_increment: Duration,
+}
+
+impl Into<BronsteinClock> for BronsteinConfig {
+    fn into(self) -> BronsteinClock {
+        BronsteinClock::new(self)
+    }
+}
+
+/// A Bronstein delay clock
+///
+/// See [`BronsteinConfig`] for more information.
+#[derive(Copy, Clone, Debug)]
+pub struct BronsteinClock {
+    config: BronsteinConfig,
+    main: Duration,
+    spent: Duration,
+}
+
+impl BronsteinClock {
+    /// Create a new Bronstein clock with the given config.
+    pub fn new(config: BronsteinConfig) -> BronsteinClock {
+        BronsteinClock {
+            config,
+            main: config.initial,
+            spent: Duration::ZERO,
+        }
+    }
+
+    /// Return a copy of the config used to create this clock
+    pub fn config(&self) -> BronsteinConfig {
+        self.config
+    }
+
+    /// Return the time remaining on the clock
+    pub fn main_remaining(&self) -> Duration {
+        self.main
+    }
+}
+
+impl TimeControl for BronsteinClock {
+    fn reset(&mut self) {
+        *self = Self::new(self.config)
+    }
+
+    fn is_expired(&self) -> bool {
+        self.main.is_zero()
+    }
+
+    fn max_remaining(&self) -> Duration {
+        self.main
+    }
+
+    fn turn_spend(&mut self, elapsed: Duration) -> bool {
+        self.spent += elapsed;
+        self.main = self.main.saturating_sub(elapsed);
+        self.main.is_zero()
+    }
+
+    fn turn_end(&mut self) {
+        if !self.main.is_zero() {
+            self.main += self.config.max_increment.min(self.spent);
+        }
+    }
+}
+
+impl fmt::Display for BronsteinClock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", ShowCountdown::with_minutes(self.main))
+    }
+}
+
+#[test]
+fn test_bronstein() {
+    let t = Duration::from_secs;
+
+    let mut clk = BronsteinClock::new(BronsteinConfig {
+        initial: t(60),
+        max_increment: t(10),
+    });
+
+    let spend = |clk: &mut BronsteinClock, secs| -> (bool, u64) {
+        let expired = clk.turn_spend(t(secs));
+        (expired, clk.main_remaining().as_secs())
+    };
+
+    assert_eq!(clk.main_remaining(), t(60));
+    clk.turn_start();
+    assert_eq!(spend(&mut clk, 5), (false, 55));
+    clk.turn_end();
+    assert_eq!(clk.main_remaining(), t(60));
+    clk.turn_start();
+    assert_eq!(spend(&mut clk, 20), (false, 40));
+    clk.turn_end();
+    assert_eq!(clk.main_remaining(), t(50));
+    clk.turn_start();
+    assert_eq!(spend(&mut clk, 20), (false, 30));
+    assert_eq!(spend(&mut clk, 20), (false, 10));
+    assert_eq!(spend(&mut clk, 20), (true, 0));
+    clk.turn_end();
+    assert_eq!(clk.main_remaining(), t(0));
 }
 
 // Byo-yomi
@@ -583,6 +732,7 @@ any_enum!(
     pub enum AnyConfig {
         SimpleDelay(SimpleDelayConfig),
         Fischer(FischerConfig),
+        Bronstein(BronsteinConfig),
         ByoYomi(ByoYomiConfig),
     }
 );
@@ -593,6 +743,7 @@ any_enum!(
     pub enum AnyClock {
         SimpleDelay(SimpleDelayClock),
         Fischer(FischerClock),
+        Bronstein(BronsteinClock),
         ByoYomi(ByoYomiClock),
     }
 );
@@ -611,6 +762,7 @@ impl AnyClock {
         match config.into() {
             AnyConfig::SimpleDelay(config) => AnyClock::SimpleDelay(SimpleDelayClock::new(config)),
             AnyConfig::Fischer(config) => AnyClock::Fischer(FischerClock::new(config)),
+            AnyConfig::Bronstein(config) => AnyClock::Bronstein(BronsteinClock::new(config)),
             AnyConfig::ByoYomi(config) => AnyClock::ByoYomi(ByoYomiClock::new(config)),
         }
     }
@@ -622,6 +774,7 @@ macro_rules! any_clock_proxy {
             match self {
                 AnyClock::SimpleDelay(clock) => clock.$name($($arg),*),
                 AnyClock::Fischer(clock) => clock.$name($($arg),*),
+                AnyClock::Bronstein(clock) => clock.$name($($arg),*),
                 AnyClock::ByoYomi(clock) => clock.$name($($arg),*),
             }
         }
@@ -632,6 +785,7 @@ macro_rules! any_clock_proxy {
             match self {
                 AnyClock::SimpleDelay(clock) => clock.$name($($arg),*),
                 AnyClock::Fischer(clock) => clock.$name($($arg),*),
+                AnyClock::Bronstein(clock) => clock.$name($($arg),*),
                 AnyClock::ByoYomi(clock) => clock.$name($($arg),*),
             }
         }
