@@ -63,39 +63,6 @@ pub trait TimeControl: fmt::Display {
     }
 }
 
-impl<T> TimeControl for T
-where
-    T: AsMut<dyn TimeControl> + AsRef<dyn TimeControl> + fmt::Display,
-{
-    fn reset(&mut self) {
-        self.as_mut().reset();
-    }
-
-    fn is_expired(&self) -> bool {
-        self.as_ref().is_expired()
-    }
-
-    fn max_remaining(&self) -> Duration {
-        self.as_ref().max_remaining()
-    }
-
-    fn turn_start(&mut self) {
-        self.as_mut().turn_start();
-    }
-
-    fn turn_spend(&mut self, elapsed: Duration) -> bool {
-        self.as_mut().turn_spend(elapsed)
-    }
-
-    fn turn_end(&mut self) {
-        self.as_mut().turn_end();
-    }
-
-    fn complete_turn(&mut self, elapsed: Duration) -> bool {
-        self.as_mut().complete_turn(elapsed)
-    }
-}
-
 // Simple delay
 // -----------------------------------------------------------------------------
 
@@ -136,6 +103,16 @@ impl SimpleDelayClock {
             delay: Duration::ZERO,
             main: config.initial,
         }
+    }
+
+    /// Return a copy of the config used to create this clock
+    pub fn config(&self) -> SimpleDelayConfig {
+        self.config
+    }
+
+    /// Return the time remaining on the clock, not accounting for the delay
+    pub fn main_remaining(&self) -> Duration {
+        self.main
     }
 }
 
@@ -228,6 +205,16 @@ impl FischerClock {
             config,
             main: config.initial,
         }
+    }
+
+    /// Return a copy of the config used to create this clock
+    pub fn config(&self) -> FischerConfig {
+        self.config
+    }
+
+    /// Return the time remaining on the clock
+    pub fn main_remaining(&self) -> Duration {
+        self.main
     }
 }
 
@@ -337,6 +324,37 @@ impl ByoYomiClock {
         }
     }
 
+    /// Return a copy of the config used to create this clock
+    pub fn config(&self) -> ByoYomiConfig {
+        self.config
+    }
+
+    /// Return the time remaining on the main countdown. This is zero when
+    /// counting down byo-yomi periods.
+    pub fn main_remaining(&self) -> Duration {
+        self.main
+    }
+
+    /// Return the number of byo-yomi periods remaining on the clock, including
+    /// the period currently counting down, if applicable
+    pub fn periods_remaining(&self) -> usize {
+        self.unused_periods + (!self.period.is_zero()) as usize
+    }
+
+    /// Return the amount of time remaining for the current period. This will be
+    /// zero during byo-yomi between `turn_end` and `turn_start`
+    pub fn this_period_remaining(&self) -> Duration {
+        self.period
+    }
+
+    /// Return the amount of time remaining for all byo-yomi periods. This plus
+    /// `main_remaining` is the total amount of that can be spent on the current
+    /// turn before the clock expires.
+    pub fn all_periods_remaining(&self) -> Duration {
+        self.period + self.config.period_time * self.unused_periods as u32
+    }
+
+    /// Return whether this clock is counting down byo-yomi periods
     pub fn in_byo_yomi(&self) -> bool {
         self.main.is_zero()
     }
@@ -410,6 +428,117 @@ impl fmt::Display for ByoYomiClock {
         write!(f, " +{}x{}", self.unused_periods, period)?;
         Ok(())
     }
+}
+
+// AnyClock
+// -----------------------------------------------------------------------------
+
+macro_rules! any_enum {
+    (
+        $(#[$meta:meta])*
+        pub enum $name:ident {
+            $($variant:ident($ty:ty),)*
+        }
+    ) => {
+        $(#[$meta])*
+        pub enum $name {
+            $($variant($ty),)*
+        }
+
+        $(
+            impl From<$ty> for $name {
+                fn from(value: $ty) -> Self {
+                    Self::$variant(value)
+                }
+            }
+
+            impl TryFrom<$name> for $ty {
+                type Error = $name;
+
+                fn try_from(value: $name) -> Result<Self, Self::Error> {
+                    match value {
+                        $name::$variant(inner) => Ok(inner),
+                        value => Err(value),
+                    }
+                }
+            }
+        )*
+    };
+}
+
+any_enum!(
+    /// An enum over all clock configuration types in this crate
+    #[derive(Copy, Clone, Debug)]
+    pub enum AnyConfig {
+        SimpleDelay(SimpleDelayConfig),
+        Fischer(FischerConfig),
+        ByoYomi(ByoYomiConfig),
+    }
+);
+
+any_enum!(
+    /// An enum over all clock types in this crate
+    #[derive(Copy, Clone, Debug)]
+    pub enum AnyClock {
+        SimpleDelay(SimpleDelayClock),
+        Fischer(FischerClock),
+        ByoYomi(ByoYomiClock),
+    }
+);
+
+impl<T> From<T> for AnyClock
+where
+    T: Into<AnyConfig>,
+{
+    fn from(value: T) -> Self {
+        Self::new(value)
+    }
+}
+
+impl AnyClock {
+    pub fn new<T: Into<AnyConfig>>(config: T) -> AnyClock {
+        match config.into() {
+            AnyConfig::SimpleDelay(config) => AnyClock::SimpleDelay(SimpleDelayClock::new(config)),
+            AnyConfig::Fischer(config) => AnyClock::Fischer(FischerClock::new(config)),
+            AnyConfig::ByoYomi(config) => AnyClock::ByoYomi(ByoYomiClock::new(config)),
+        }
+    }
+}
+
+macro_rules! any_clock_proxy {
+    (fn $name:ident(&self $(, $arg:ident : $argty:ty)*) -> $ret:ty) => {
+        fn $name(&self, $($arg: $argty)*) -> $ret {
+            match self {
+                AnyClock::SimpleDelay(clock) => clock.$name($($arg),*),
+                AnyClock::Fischer(clock) => clock.$name($($arg),*),
+                AnyClock::ByoYomi(clock) => clock.$name($($arg),*),
+            }
+        }
+    };
+
+    (fn $name:ident(&mut self $(, $arg:ident : $argty:ty)*) -> $ret:ty) => {
+        fn $name(&mut self, $($arg: $argty)*) -> $ret {
+            match self {
+                AnyClock::SimpleDelay(clock) => clock.$name($($arg),*),
+                AnyClock::Fischer(clock) => clock.$name($($arg),*),
+                AnyClock::ByoYomi(clock) => clock.$name($($arg),*),
+            }
+        }
+    };
+}
+
+impl fmt::Display for AnyClock {
+    any_clock_proxy!(fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result);
+}
+
+impl TimeControl for AnyClock {
+    any_clock_proxy!(fn reset(&mut self) -> ());
+    any_clock_proxy!(fn is_expired(&self) -> bool);
+    any_clock_proxy!(fn max_remaining(&self) -> Duration);
+    any_clock_proxy!(fn turn_start(&mut self) -> ());
+    any_clock_proxy!(fn turn_spend(&mut self, elapsed: Duration) -> bool);
+    any_clock_proxy!(fn turn_end(&mut self) -> ());
+    any_clock_proxy!(fn complete_turn(&mut self, elapsed: Duration) -> bool);
 }
 
 // TwoPlayer

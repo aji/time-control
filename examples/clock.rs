@@ -8,11 +8,10 @@ use pancurses::{
     init_pair, initscr, noecho, start_color,
 };
 use time_control::{
-    ByoYomiClock, ByoYomiConfig, FischerClock, FischerConfig, SimpleDelayClock, SimpleDelayConfig,
-    TimeControl, TwoPlayer,
+    AnyClock, AnyConfig, ByoYomiConfig, FischerConfig, SimpleDelayConfig, TimeControl, TwoPlayer,
 };
 
-type BoxedGameClock = TwoPlayer<Box<dyn TimeControl>>;
+type BoxedGameClock = TwoPlayer<AnyClock>;
 
 fn main() {
     let win = initscr();
@@ -32,8 +31,8 @@ fn main() {
         let Some(choice) = choose_time_control(&win) else {
             break;
         };
-        let (p1, p2) = (choice.make)();
-        let tc = TwoPlayer::new_asymmetric(p1, p2);
+        let cf = (choice.make)();
+        let tc = TwoPlayer::new(cf);
         run_time_control(&win, choice.label, tc);
     }
 
@@ -42,7 +41,7 @@ fn main() {
 
 struct Choice {
     label: &'static str,
-    make: fn() -> (Box<dyn TimeControl>, Box<dyn TimeControl>),
+    make: fn() -> AnyConfig,
 }
 
 static CHOICES: LazyLock<Vec<Choice>> = LazyLock::new(|| {
@@ -50,38 +49,29 @@ static CHOICES: LazyLock<Vec<Choice>> = LazyLock::new(|| {
         Choice {
             label: "Simple delay 3:00 (5s)",
             make: || {
-                let cf = SimpleDelayConfig {
+                AnyConfig::from(SimpleDelayConfig {
                     initial: Duration::from_mins(3),
                     delay: Duration::from_secs(5),
-                };
-                let p1 = SimpleDelayClock::new(cf);
-                let p2 = SimpleDelayClock::new(cf);
-                (Box::new(p1), Box::new(p2))
+                })
             },
         },
         Choice {
             label: "Fischer 3:00 +5s",
             make: || {
-                let cf = FischerConfig {
+                AnyConfig::from(FischerConfig {
                     initial: Duration::from_mins(3),
                     increment: Duration::from_secs(5),
-                };
-                let p1 = FischerClock::new(cf);
-                let p2 = FischerClock::new(cf);
-                (Box::new(p1), Box::new(p2))
+                })
             },
         },
         Choice {
             label: "Byo-yomi 2:00 +3x20s",
             make: || {
-                let cf = ByoYomiConfig {
+                AnyConfig::from(ByoYomiConfig {
                     initial: Duration::from_mins(2),
                     period_time: Duration::from_secs(20),
                     num_periods: 3,
-                };
-                let p1 = ByoYomiClock::new(cf);
-                let p2 = ByoYomiClock::new(cf);
-                (Box::new(p1), Box::new(p2))
+                })
             },
         },
     ]
