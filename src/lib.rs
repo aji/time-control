@@ -972,8 +972,10 @@ impl TimeControl for AnyClock {
 ///
 /// Time is spent with [`turn_spend`][`Self::turn_spend`], and the player whose
 /// clock this is accounted to is changed with [`set_p1_turn`][`Self::set_p1_turn`]
-/// and [`set_p2_turn`][`Self::set_p2_turn`]. When either player's clock expires,
-/// further calls to [`turn_spend`][`Self::turn_spend`] have no effect.
+/// and [`set_p2_turn`][`Self::set_p2_turn`]. Before the first turn, and after
+/// either clock expires, calls to [`turn_spend`][`Self::turn_spend`] have no
+/// effect and [`p1_turn`][`Self::p1_turn`] and [`p2_turn`][`Self::p2_turn`]
+/// both return false.
 ///
 /// # Example
 ///
