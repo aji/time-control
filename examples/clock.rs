@@ -105,12 +105,11 @@ fn run_time_control(win: &Window, name: &'static str, mut tc: BoxedGameClock) {
 
     let mut now = Instant::now();
     let mut last_update = now;
-    let mut game_over = false;
     let mut ffw = false;
     let mut paused = false;
 
     loop {
-        let status = if game_over {
+        let status = if tc.is_expired() {
             "Game over!"
         } else if tc.p1_turn() || tc.p2_turn() {
             "Game in progress..."
@@ -130,7 +129,7 @@ fn run_time_control(win: &Window, name: &'static str, mut tc: BoxedGameClock) {
         win.mvprintw(8, 2, "Space:Toggle p:Pause f:Fast-forward r:Reset q:Exit");
 
         match win.getch() {
-            Some(Input::Character(' ')) if !game_over => match tc.p1_turn() {
+            Some(Input::Character(' ')) => match tc.p1_turn() {
                 true => tc.set_p2_turn(),
                 false => tc.set_p1_turn(),
             },
@@ -150,9 +149,7 @@ fn run_time_control(win: &Window, name: &'static str, mut tc: BoxedGameClock) {
             if ffw {
                 elapsed = elapsed * 20;
             }
-            if !game_over {
-                game_over = tc.turn_spend(elapsed);
-            }
+            tc.turn_spend(elapsed);
         }
         last_update = now;
 

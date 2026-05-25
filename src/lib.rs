@@ -33,8 +33,8 @@
 //! ```rust
 //! # use time_control::*;
 //! # use std::time::Duration;
-//! let _1s = Duration::from_secs(1);
-//! let _1m = Duration::from_mins(1);
+//! let _1sec = Duration::from_secs(1);
+//! let _1min = Duration::from_mins(1);
 //!
 //! // Our clock config, a simple 3:00 clock with 5s increment.
 //! let cf = FischerConfig::new(3, 5);
@@ -47,11 +47,11 @@
 //!
 //! // We can start a turn, then spend some time as it counts down:
 //! clk.turn_start();
-//! clk.turn_spend(_1s);
+//! clk.turn_spend(_1sec);
 //! assert_eq!(clk.to_string(), "2:59");
-//! clk.turn_spend(_1s);
+//! clk.turn_spend(_1sec);
 //! assert_eq!(clk.to_string(), "2:58");
-//! clk.turn_spend(_1s);
+//! clk.turn_spend(_1sec);
 //! assert_eq!(clk.to_string(), "2:57");
 //!
 //! // When we end our turn, the 5s increment is added:
@@ -60,17 +60,17 @@
 //!
 //! // Now let's start our next turn and spend too much time thinking...
 //! clk.turn_start();
-//! assert_eq!(clk.turn_spend(_1m), false);
+//! assert_eq!(clk.turn_spend(_1min), false);
 //! assert_eq!(clk.to_string(), "2:02");
-//! assert_eq!(clk.turn_spend(_1m), false);
+//! assert_eq!(clk.turn_spend(_1min), false);
 //! assert_eq!(clk.to_string(), "1:02");
-//! assert_eq!(clk.turn_spend(_1m), false);
+//! assert_eq!(clk.turn_spend(_1min), false);
 //! assert_eq!(clk.to_string(), "2.0s");
-//! assert_eq!(clk.turn_spend(_1s), false);
+//! assert_eq!(clk.turn_spend(_1sec), false);
 //! assert_eq!(clk.to_string(), "1.0s");
 //!
 //! // After 1 more second, the clock expires!
-//! assert_eq!(clk.turn_spend(_1s), true);
+//! assert_eq!(clk.turn_spend(_1sec), true);
 //! assert_eq!(clk.to_string(), "0.0s");
 //! assert!(clk.is_expired());
 //! clk.turn_end();
@@ -969,7 +969,57 @@ impl TimeControl for AnyClock {
 // -----------------------------------------------------------------------------
 
 /// Track time controls for two players
+///
+/// Time is spent with [`turn_spend`][`Self::turn_spend`], and the player whose
+/// clock this is accounted to is changed with [`set_p1_turn`][`Self::set_p1_turn`]
+/// and [`set_p2_turn`][`Self::set_p2_turn`]. When either player's clock expires,
+/// further calls to [`turn_spend`][`Self::turn_spend`] have no effect.
+///
+/// # Example
+///
+/// ```
+/// # use time_control::*;
+/// # use std::time::Duration;
+/// let _1sec = Duration::from_secs(1);
+/// let _1min = Duration::from_mins(1);
+///
+/// let cf = FischerConfig::new(3, 5);
+/// let mut tc: TwoPlayer<FischerClock> = TwoPlayer::new(cf);
+///
+/// let show = |tc: &TwoPlayer<FischerClock>| format!("{} {}", tc.p1(), tc.p2());
+///
+/// assert_eq!(show(&tc), "3:00 3:00");
+///
+/// tc.set_p1_turn();
+/// tc.turn_spend(_1min);
+/// assert_eq!(show(&tc), "2:00 3:00");
+///
+/// tc.set_p2_turn();
+/// tc.turn_spend(_1min);
+/// tc.turn_spend(_1min);
+/// assert_eq!(show(&tc), "2:05 1:00");
+///
+/// tc.set_p1_turn();
+/// tc.turn_spend(_1min);
+/// tc.turn_spend(_1min);
+/// assert_eq!(show(&tc), "5.0s 1:05");
+///
+/// tc.set_p2_turn();
+/// tc.turn_spend(_1min);
+/// assert_eq!(show(&tc), "0:10 5.0s");
+/// assert!(!tc.turn_spend(_1sec));
+/// assert!(!tc.turn_spend(_1sec));
+/// assert!(!tc.turn_spend(_1sec));
+/// assert_eq!(show(&tc), "0:10 2.0s");
+/// assert!(!tc.turn_spend(_1sec));
+/// assert_eq!(show(&tc), "0:10 1.0s");
+///
+/// // now it expires:
+/// assert!(tc.turn_spend(_1sec));
+/// assert_eq!(show(&tc), "0:10 0.0s");
+/// ```
 pub struct TwoPlayer<P1, P2 = P1> {
+    p1_lose: Option<bool>,
     p1_turn: Option<bool>,
     p1: P1,
     p2: P2,
@@ -1001,6 +1051,7 @@ where
         T2: Into<P2>,
     {
         TwoPlayer {
+            p1_lose: None,
             p1_turn: None,
             p1: p1.into(),
             p2: p2.into(),
@@ -1010,19 +1061,25 @@ where
     /// Reset the time control to its initial configuration. After resetting,
     /// the time control will be stopped for both players.
     pub fn reset(&mut self) {
+        self.p1_lose = None;
         self.p1_turn = None;
         self.p1.reset();
         self.p2.reset();
     }
 
+    /// Return whether either player's clock has expired
+    pub fn is_expired(&self) -> bool {
+        self.p1_lose.is_some()
+    }
+
     /// Return whether the first player's clock is counting down.
     pub fn p1_turn(&self) -> bool {
-        self.p1_turn.unwrap_or(false)
+        self.p1_lose.is_none() && self.p1_turn.unwrap_or(false)
     }
 
     /// Return whether the second player's clock is counting down.
     pub fn p2_turn(&self) -> bool {
-        !self.p1_turn.unwrap_or(true)
+        self.p1_lose.is_none() && !self.p1_turn.unwrap_or(true)
     }
 
     /// Return a reference to the first player's time control
@@ -1035,17 +1092,11 @@ where
         &self.p2
     }
 
-    /// Return a mutable reference to the first player's time control
-    pub fn p1_mut(&mut self) -> &mut P1 {
-        &mut self.p1
-    }
-
-    /// Return a mutable reference to the second player's time control
-    pub fn p2_mut(&mut self) -> &mut P2 {
-        &mut self.p2
-    }
-
     fn set_turn(&mut self, p1: Option<bool>) {
+        if self.p1_lose.is_some() {
+            return;
+        }
+
         let p1_turn = self.p1_turn();
         let p2_turn = self.p2_turn();
 
@@ -1092,9 +1143,23 @@ where
     /// Update the clocks given the amount of time that has passed since the
     /// last update. Returns whether either player's clock has expired
     pub fn turn_spend(&mut self, elapsed: Duration) -> bool {
-        let p1_expired = self.p1.turn_spend(elapsed);
-        let p2_expired = self.p2.turn_spend(elapsed);
-        p1_expired || p2_expired
+        if self.p1_lose.is_none() {
+            let p1_expired = self.p1.turn_spend(elapsed);
+            let p2_expired = self.p2.turn_spend(elapsed);
+
+            if p1_expired {
+                self.clear_turn();
+                self.p1_lose = Some(true);
+            }
+            if p2_expired {
+                self.clear_turn();
+                self.p1_lose = Some(false);
+            }
+
+            p1_expired || p2_expired
+        } else {
+            true
+        }
     }
 }
 
